@@ -111,7 +111,7 @@ if ('serviceWorker' in navigator) {
 </section>
 <div class="toggle" id="studyViewToggle"><button id="koreanBtn" class="active">한국어 보기</button><button id="englishBtn">영어 보기</button><button id="bothBtn">함께 보기</button></div>
 <section class="panel" id="voiceSettingsPanel"><strong style="font-size:14px">🔊 음성 설정</strong><div style="margin-top:10px"><label for="voiceRate">말하기 속도 <span id="rateLabel">0.85배</span></label><input id="voiceRate" type="range" min="0.75" max="1.05" step="0.05" value="0.85" style="width:100%"></div></section>
-<section class="panel" id="sentenceStudyPanel"><div class="small" style="margin-bottom:10px">🎙 기존 녹음은 내 목소리 확인용이에요. 복습 통과는 별도의 영어 음성 인식으로 확인합니다.</div><div class="filterbar"><button id="showAll" class="active">오늘 20문장</button><button id="showReview">복습할 문장</button><span class="item-count" id="itemCount"></span></div><ol class="list" id="sentenceList"></ol><div class="small" id="emptyReview" style="display:none;padding:18px 0">복습할 문장이 아직 없어요. 헷갈리는 문장에서 ‘복습’ 버튼을 눌러 추가하세요.</div></section>
+<section class="panel" id="sentenceStudyPanel"><div class="small" style="margin-bottom:10px">🎙 음성인식과 내 목소리 녹음은 마이크 충돌 방지를 위해 따로 실행합니다.</div><div class="filterbar"><button id="showAll" class="active">오늘 20단어</button><button id="showReview">복습할 단어</button><span class="item-count" id="itemCount"></span></div><ol class="list" id="sentenceList"></ol><div class="small" id="emptyReview" style="display:none;padding:18px 0">복습할 단어이 아직 없어요. 헷갈리는 문장에서 ‘복습’ 버튼을 눌러 추가하세요.</div></section>
 <section class="panel" id="studyActionsPanel">
 <div class="actions"><button class="primary" id="markDone">✓ 오늘 학습 완료</button><button id="undoDone">완료 취소</button></div>
 <div class="status" id="studyStatus">학습을 마친 뒤 완료 버튼을 눌러 기록하세요.</div><div id="bonusGameWrap" style="display:none;margin-top:10px"><button class="primary" id="bonusGameBtn" style="width:100%">🎁 보너스 미니게임 1분 도전하기</button><div class="small" id="bonusGameHint" style="text-align:center;margin-top:5px">오늘의 20개 단어 학습을 완료하면 1분 보너스 게임이 열려요.</div></div>
@@ -729,78 +729,27 @@ window.onIlbbangNativeVoiceResult=async function(result){
  }
 };
 
+function voiceItem(no){const base=no>=10000?Math.floor(no/10)-1000:no;const item=DATA.flatMap(d=>d.items).find(x=>x.no===base);return no>=10000&&item?{...item,en:item.forms[no%10]}:item;}
+function formId(no,i){return (no+1000)*10+i;}
 async function startRecording(no){
- const attemptKey=speakingKey(no),attemptCount=Number(speakingAttempts()[attemptKey]||0);
- if(attemptCount>=3&&!speakingPasses()[attemptKey]?.passed){alert('이 문장은 3회 도전을 마쳤어요. 오늘 복습 목록에서 다시 연습해 주세요.');return;}
- if(window.IlbbangAndroid&&typeof window.IlbbangAndroid.startRecording==='function'){
-  if(activeNo!==null||nativeVoicePending){alert('이전 문장의 음성 확인이 끝나지 않았어요. 잠시만 기다려 주세요.');return;}
-  const item=DATA.flatMap(d=>d.items).find(x=>x.no===no);if(!item)return;
-  activeNo=no;activeSentence=item;activeChunks=[];activeTranscript='';activeRecognitionError='';
-  recognitionEnded=false;recorderEnded=false;finalizingRecording=false;
-  const requestId=nativeVoiceId();nativeVoicePending={requestId,mode:'sentence',no};
-  updateRecordResult(no,'마이크를 준비하고 있어요…');
-  const btn=document.querySelector(`[data-record="${no}"]`);if(btn){btn.textContent='⏺ 녹음 준비 중…';btn.disabled=true;}
-  try{window.IlbbangAndroid.startRecording(requestId,'sentence');}
-  catch(err){
-   nativeVoiceClear();activeNo=null;activeSentence=null;recognitionEnded=true;recorderEnded=true;
-   updateRecordResult(no,'녹음을 시작하지 못했어요: '+escapeHtml(err.message||String(err)));
-   if(btn)btn.textContent='🎙 다시 녹음';render();
-  }
-  return;
- }
- const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
- if(!Recognition){alert('이 브라우저는 영어 음성인식을 지원하지 않아요. 안드로이드 크롬에서 다시 시도해 주세요.');return;}
- if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){alert('이 브라우저는 녹음을 지원하지 않아요. HTTPS 주소의 크롬에서 열어 주세요.');return;}
- if(activeNo!==null){alert('먼저 진행 중인 녹음을 마쳐 주세요.');return;}
- const item=DATA.flatMap(d=>d.items).find(x=>x.no===no);
- if(!item)return;
- try{
-  activeNo=no;activeSentence=item;activeChunks=[];activeTranscript='';recognitionEnded=false;recorderEnded=false;activeRecognitionError='';
-  updateRecordResult(no,'마이크를 준비하고 있어요…');
-  // 마이크 스트림은 한 번만 열어 MediaRecorder가 발화를 저장한다.
-  // 그 다음 SpeechRecognition을 시작해 같은 발화를 동시에 인식하는지 확인한다.
-  activeStream=await navigator.mediaDevices.getUserMedia({audio:true});
-  activeRecorder=new MediaRecorder(activeStream);
-  activeRecorder.ondataavailable=e=>{if(e.data&&e.data.size)activeChunks.push(e.data)};
-  activeRecorder.onstop=()=>{recorderEnded=true;finishSpeakingAttempt();};
-  activeRecorder.start();
-
-  const recognition=new Recognition();activeRecognition=recognition;
-  recognition.lang='en-US';recognition.continuous=true;recognition.interimResults=true;recognition.maxAlternatives=1;
-  let latestTranscript='';
-  recognition.onresult=e=>{
-   const parts=[];
-   for(let i=0;i<e.results.length;i++){
-    const text=e.results[i]?.[0]?.transcript||'';
-    if(text)parts.push(text);
-   }
-   latestTranscript=parts.join(' ').trim();
-   activeTranscript=latestTranscript;
-   updateRecordResult(no,`🔴 문장을 영어로 말해 주세요.<br><b>인식 중:</b> ${escapeHtml(latestTranscript)}`);
-  };
-  recognition.onerror=e=>{
-   activeRecognitionError=e.error||'unknown';
-   updateRecordResult(no,`음성인식 오류: <b>${escapeHtml(activeRecognitionError)}</b><br>녹음은 진행 중이지만 음성인식 실패 시 통과되지 않아요.`);
-  };
-  recognition.onend=()=>{
-   recognitionEnded=true;
-   if(latestTranscript)activeTranscript=latestTranscript;
-   finishSpeakingAttempt();
-  };
-  updateRecordResult(no,'🔴 녹음 중이에요. 영어 문장을 말해 주세요. 다 말한 뒤 <b>녹음 종료</b>를 누르면 일치율을 확인합니다.');
-  const btn=document.querySelector(`[data-record="${no}"]`);if(btn)btn.textContent='⏹ 녹음 종료';
-  try{recognition.start();}
-  catch(e){activeRecognitionError='recognition-start-failed';throw e;}
- }catch(err){
-  try{if(activeRecognition)activeRecognition.abort()}catch(e){}
-  if(activeRecorder&&activeRecorder.state!=='inactive'){try{activeRecorder.stop()}catch(e){}}
-  if(activeStream){activeStream.getTracks().forEach(t=>t.stop());activeStream=null;}
-  activeRecorder=null;activeRecognition=null;activeNo=null;activeSentence=null;activeRecognitionError='';recognitionEnded=true;recorderEnded=true;
-  updateRecordResult(no,'녹음 또는 음성인식을 시작하지 못했어요. 크롬의 마이크 권한을 확인하고 다시 시도해 주세요.');
-  const btn=document.querySelector(`[data-record="${no}"]`);if(btn)btn.textContent='🎙 다시 녹음';
-  alert('녹음/음성인식을 시작하지 못했어요. 마이크 권한과 인터넷 연결을 확인해 주세요. ('+err.message+')');
- }
+ if(activeNo!==null)return;
+ const item=voiceItem(no),Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+ if(!item||!Recognition){alert('크롬 영어 음성인식을 사용할 수 없어요.');return;}
+ stopEnglishSpeech();activeNo=no;activeSentence=item;
+ const r=new Recognition();activeRecognition=r;r.lang='en-US';r.continuous=false;r.interimResults=false;r.maxAlternatives=3;
+ let spoken='',error='',resolved=false;
+ const done=()=>{if(resolved)return;resolved=true;clearTimeout(timer);activeNo=null;activeRecognition=null;activeSentence=null;
+ const k=speakingKey(no),saved=speakingPasses(),attempts=speakingAttempts();
+ const percent=speakingMatch(item.en,spoken);
+ if(spoken&&!error){if(percent>= (item.forms?100:50)){saved[k]={passed:true,percent,transcript:spoken};delete attempts[k];}else{attempts[k]=Math.min(3,(attempts[k]||0)+1);if(no<10000&&attempts[k]>=3)autoAddFailedSpeakingToReview(no);}}
+ if(no>=10000){const base=Math.floor(no/10)-1000;const keys=[0,1,2].map(i=>speakingKey(formId(base,i)));if(keys.every(k=>saved[k]?.passed))saved[speakingKey(base)]={passed:true,percent:100,transcript:voiceItem(base).en};}
+ writeMap(SPEAKING_PASS_KEY,saved);writeMap(SPEAKING_ATTEMPT_KEY,attempts);
+ updateRecordResult(no,error||!spoken?'음성인식 실패: '+escapeHtml(error||'no-speech')+' (횟수 차감 없음)':`인식: ${escapeHtml(spoken)} · ${percent}%`);render();};
+ r.onresult=e=>{const choices=Array.from(e.results[0]);spoken=(choices.find(x=>speakingMatch(item.en,x.transcript)===100)||choices[0]).transcript;};r.onerror=e=>{error=e.error;};r.onend=done;
+ const timer=setTimeout(()=>{error='timeout';try{r.abort()}catch(e){}done()},15000);
+ updateRecordResult(no,'영어로 말해 주세요…');const btn=document.querySelector(`[data-record="${no}"]`);if(btn)btn.textContent='⏹ 종료';try{r.start()}catch(e){error=e.message;done();}
 }
+async function recordOnly(no,btn){if(activeNo!==null)return;activeNo=no;let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:true});const r=new MediaRecorder(stream),chunks=[];r.ondataavailable=e=>chunks.push(e.data);r.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());activeNo=null;const blob=new Blob(chunks,{type:r.mimeType});recordingResults[no]={audioUrl:URL.createObjectURL(blob),html:'내 목소리 녹음'};render();try{await saveRecordingBlob(no,blob,'내 목소리 녹음')}catch(e){console.warn(e)}};r.start();btn.textContent='⏹ 녹음 종료';btn.onclick=()=>{if(r.state!=='inactive')r.stop()};setTimeout(()=>{if(r.state!=='inactive')r.stop()},15000);}catch(e){if(stream)stream.getTracks().forEach(t=>t.stop());activeNo=null;alert(e.message);}}
 function finishRecording(){
  // APK에서는 activeNo가 먼저 초기화된 경우에도 네이티브 요청 ID가 살아 있으면
  // 해당 요청을 종료해야 합니다. 기존 코드의 activeNo 조기 반환이 종료 버튼을 무시하게 했습니다.
@@ -855,17 +804,17 @@ function render(){
  $('itemCount').textContent=listMode==='all'?`${data.items.length}개`:`복습 ${visible.length}개`;
  $('emptyReview').style.display=visible.length?'none':'block';
  $('sentenceList').innerHTML=visible.map(x=>{
-  let text=viewMode==='ko'?escapeHtml(x.ko):viewMode==='en'?escapeHtml(x.en):`<div>${escapeHtml(x.ko)}</div><div class="english" style="font-size:.86em;color:#5f695e;margin-top:3px">${escapeHtml(x.en)}</div>`;
-  if(x.example){text+=`<div class="vocab-example" style="font-size:.82em;margin-top:5px;color:#52645c">${escapeHtml(x.example)}</div>`;if(x.translation)text+=`<div style="font-size:.78em;color:#777">${escapeHtml(x.translation)}</div>`;}
-  if(x.forms&&x.forms.length===3){text+=`<div class="vocab-forms" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:9px">${x.forms.map((form,i)=>`<button type="button" class="speak-btn" data-form-speak="${x.no}" data-form-index="${i}" style="padding:7px 11px">🔊 ${escapeHtml(form)}</button>`).join('')}</div>`;}
-  else if(x.example){text+=`<div style="margin-top:6px"><button type="button" class="speak-btn" data-example-speak="${x.no}" style="padding:7px 11px">🔊 예문 듣기</button></div>`;}
+  const irregular=x.forms?.length===3,ko=irregular?x.ko.split(' · ')[0]:x.ko;
+  let text=viewMode==='ko'?escapeHtml(ko):viewMode==='en'?escapeHtml(x.en):`<div>${escapeHtml(ko)}</div>${irregular?'':`<div>${escapeHtml(x.en)}</div>`}`;
+  if(irregular){text=viewMode==='en'?'':escapeHtml(ko);text+=`<div style="display:grid;gap:8px;margin-top:8px">${x.forms.map((form,i)=>{const id=formId(x.no,i),rec=recordingResults[id],pass=speaking[speakingKey(id)];return `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px;align-items:center"><div style="font-size:14px">${['현재형','과거형','과거분사'][i]}<br>${viewMode==='ko'?'':escapeHtml(form)}</div><button class="speak-btn" data-form-speak="${x.no}" data-form-index="${i}">🔊</button><button class="record-btn" data-record="${id}">${pass?.passed?'✓':'🎙'} 인식</button><button style="grid-column:2/4" data-audio-only="${id}">내 목소리 녹음</button><div style="grid-column:1/-1;font-size:13px" id="record-${id}">${rec?.html||''}${rec?.audioUrl?`<audio controls src="${rec.audioUrl}"></audio>`:''}</div></div>`}).join('')}</div>`;}
+  else if(x.example){if(viewMode!=='ko')text+=`<div>${escapeHtml(x.example)}</div>`;if(viewMode!=='en'&&x.translation)text+=`<div>${escapeHtml(x.translation)}</div>`;text+=`<button class="speak-btn" data-example-speak="${x.no}">🔊 예문 듣기</button>`;}
   const pass=speaking[speakingKey(x.no)];
   const attemptCount=Number(speakingAttempts()[speakingKey(x.no)]||0);
   const rec=recordingResults[x.no];
   const initial=pass?.passed?`<b>✅ 통과 · 일치율 ${pass.percent}%</b><br>인식 결과: “${escapeHtml(pass.transcript||'')}”`:'';
   const exhausted=attemptCount>=3&&!pass?.passed;
   const recordLabel=activeNo===x.no?'⏹ 녹음 종료':pass?.passed?'✅ 말하기 통과':exhausted?'📚 복습 대기':attemptCount?`🎙 다시 녹음 (${attemptCount}/3)`:'🎙 녹음';
-  return `<li><span class="num">${String(x.no).padStart(3,'0')}</span><span class="item-main"><span class="item-text">${text}</span><span class="item-tools"><button class="speak-btn" data-speak="${x.no}" aria-label="영어 단어 또는 표현 듣기">🔊 듣기</button><button class="record-btn" data-record="${x.no}" ${exhausted?'disabled':''}>${recordLabel}</button><label><input type="checkbox" data-check="${x.no}" ${checked[x.no]?'checked':''}> 학습 완료</label><button class="review-btn ${review[x.no]?'saved':''}" data-review="${x.no}">${review[x.no]?'★ 복습 목록에 있음':'☆ 복습 추가'}</button></span><div class="record-result ${rec||initial?'show':''}" id="record-${x.no}">${rec?.html||initial}${rec?.audioUrl?`<audio controls class="record-audio" src="${rec.audioUrl}"></audio>`:''}</div></span></li>`;
+  return `<li><span class="num">${String(x.no).padStart(3,'0')}</span><span class="item-main"><span class="item-text">${text}</span><span class="item-tools">${irregular?'':`<button class="speak-btn" data-speak="${x.no}" aria-label="영어 단어 또는 표현 듣기">🔊 듣기</button><button class="record-btn" data-record="${x.no}" ${exhausted?'disabled':''}>${recordLabel}</button><button data-audio-only="${x.no}">내 목소리 녹음</button>`}<label><input type="checkbox" data-check="${x.no}" ${checked[x.no]?'checked':''}> 학습 완료</label><button class="review-btn ${review[x.no]?'saved':''}" data-review="${x.no}">${review[x.no]?'★ 복습 목록에 있음':'☆ 복습 추가'}</button></span><div class="record-result ${rec||initial?'show':''}" id="record-${x.no}">${rec?.html||initial}${rec?.audioUrl?`<audio controls class="record-audio" src="${rec.audioUrl}"></audio>`:''}</div></span></li>`;
  }).join('');
  // Android WebView에서 부모 요소의 위임 클릭이 누락되는 경우를 피하도록
  // 녹음 버튼 자체에 직접 클릭 동작을 연결합니다.
@@ -884,6 +833,7 @@ function render(){
    if(item)speakEnglish(item.en);
   };
  });
+ $('sentenceList').querySelectorAll('button[data-audio-only]').forEach(btn=>btn.onclick=()=>recordOnly(Number(btn.dataset.audioOnly),btn));
  $('sentenceList').querySelectorAll('button[data-record]').forEach(recordButton=>{
   recordButton.onclick=e=>{
    e.preventDefault();
@@ -915,7 +865,7 @@ function render(){
  $('bonusGameBtn').disabled=previewDay!==null||!done;
  $('bonusGameBtn').textContent=done?'🎁 보너스 미니게임 1분 도전하기':'🔒 오늘 학습 완료 후 보너스 게임 열기';
  $('bonusGameHint').textContent=done?'오늘 학습을 완료했어요! 1분 보너스 게임을 할 수 있어요.':'오늘의 20개 단어 학습을 완료하면 1분 보너스 게임이 열려요.';
- $('studyStatus').textContent=reviewModeNow==='scheduled'?`오늘 복습할 문장 ${due.length}개를 먼저 통과해야 새 학습을 시작할 수 있어요.`:reviewModeNow==='daily'?`오늘 추가한 복습 문장 ${dailyPending.length}개를 순서대로 통과하면 오늘 학습을 완료할 수 있어요.`:done?'오늘 학습 완료 기록이 저장되어 있어요. 달력에서 확인할 수 있습니다.':allSentencesDone&&!allSpeakingPassed?`문장 학습은 체크했어요. 녹음 통과 ${data.items.filter(x=>speaking[speakingKey(x.no)]?.passed).length}/${data.items.length}개가 필요해요.`:allSentencesDone?'모든 문장을 학습하고 녹음도 통과했어요! 이제 오늘 학습 완료를 누를 수 있어요.':`문장별 학습 완료를 먼저 체크해 주세요. (${todayChecked}/${data.items.length})`;
+ $('studyStatus').textContent=reviewModeNow==='scheduled'?`오늘 복습할 단어 ${due.length}개를 먼저 통과해야 새 학습을 시작할 수 있어요.`:reviewModeNow==='daily'?`오늘 추가한 복습 문장 ${dailyPending.length}개를 순서대로 통과하면 오늘 학습을 완료할 수 있어요.`:done?'오늘 학습 완료 기록이 저장되어 있어요. 달력에서 확인할 수 있습니다.':allSentencesDone&&!allSpeakingPassed?`문장 학습은 체크했어요. 녹음 통과 ${data.items.filter(x=>speaking[speakingKey(x.no)]?.passed).length}/${data.items.length}개가 필요해요.`:allSentencesDone?'모든 문장을 학습하고 녹음도 통과했어요! 이제 오늘 학습 완료를 누를 수 있어요.':`문장별 학습 완료를 먼저 체크해 주세요. (${todayChecked}/${data.items.length})`;
  renderCalendar();
  if(previewDay===null&&readRecords()[key(iso(today),currentDay())])awardToday();
  renderRewards();
@@ -1069,7 +1019,7 @@ $('daySelect').onchange=()=>{previewDay=Number($('daySelect').value);render()};
 $('koreanBtn').onclick=()=>{viewMode='ko';render()};
 $('englishBtn').onclick=()=>{viewMode='en';render()};
 $('bothBtn').onclick=()=>{viewMode='both';render()};
-$('markDone').onclick=()=>{if(previewDay!==null)return;if(dueReviewItems().length||todayDailyReviewItems().length){alert('오늘 복습할 문장을 먼저 모두 통과해 주세요.');render();return;}const items=DATA[currentDay()-1].items;const checked=readMap('vocabSeq1981Checked'),speaking=speakingPasses();if(!items.every(x=>!!checked[x.no])){alert('오늘의 단어 학습을 모두 체크한 뒤 완료할 수 있어요.');render();return;}if(!items.every(x=>!!speaking[speakingKey(x.no)]?.passed)){alert('오늘의 모든 문장을 녹음하고 일치율 50% 이상을 통과해야 완료할 수 있어요.');render();return;}let r=readRecords();r[key(iso(today),currentDay())]=true;localStorage.setItem('vocabSeq1981Records',JSON.stringify(r));awardToday(true);render()};
+$('markDone').onclick=()=>{if(previewDay!==null)return;if(dueReviewItems().length||todayDailyReviewItems().length){alert('오늘 복습할 단어을 먼저 모두 통과해 주세요.');render();return;}const items=DATA[currentDay()-1].items;const checked=readMap('vocabSeq1981Checked'),speaking=speakingPasses();if(!items.every(x=>!!checked[x.no])){alert('오늘의 단어 학습을 모두 체크한 뒤 완료할 수 있어요.');render();return;}if(!items.every(x=>!!speaking[speakingKey(x.no)]?.passed)){alert('오늘의 모든 문장을 녹음하고 일치율 50% 이상을 통과해야 완료할 수 있어요.');render();return;}let r=readRecords();r[key(iso(today),currentDay())]=true;localStorage.setItem('vocabSeq1981Records',JSON.stringify(r));awardToday(true);render()};
 $('undoDone').onclick=()=>{if(previewDay!==null)return;let r=readRecords();delete r[key(iso(today),currentDay())];localStorage.setItem('vocabSeq1981Records',JSON.stringify(r));render()};
 $('prevMonth').onclick=()=>{calendarDate=new Date(calendarDate.getFullYear(),calendarDate.getMonth()-1,1);renderCalendar()};
 $('nextMonth').onclick=()=>{calendarDate=new Date(calendarDate.getFullYear(),calendarDate.getMonth()+1,1);renderCalendar()};
