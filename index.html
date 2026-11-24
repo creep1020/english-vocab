@@ -72,6 +72,8 @@ button{cursor:pointer}button:disabled{opacity:.4;cursor:default}.primary{backgro
 .keke-stage-dots{display:flex;justify-content:center;gap:8px;margin-top:9px;color:#b8a8d3;font-size:13px}.keke-stage-dots .active{color:#e78bb9;text-shadow:0 1px 3px #f5c4dc}
 .keke-preview-tools{margin-top:10px;padding:10px;border:1px dashed #bba5df;border-radius:12px;background:#fbf8ff}.keke-preview-tools .preview-buttons{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.keke-preview-tools button{padding:8px 4px;font-size:12px}.keke-preview-tools button.active{background:#8d6bd6;color:#fff;border-color:#8d6bd6}
 @keyframes kekeFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+
+[data-form-speak], [data-record][data-record]:not(.item-tools button), .form-audio{padding:5px 6px!important;font-size:12px!important;min-width:0!important;min-height:34px!important;white-space:nowrap!important;}
 </style></head>
  <script>
 if ('serviceWorker' in navigator) {
@@ -736,7 +738,7 @@ async function startRecording(no){
  const item=voiceItem(no),Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
  if(!item||!Recognition){alert('크롬 영어 음성인식을 사용할 수 없어요.');return;}
  stopEnglishSpeech();activeNo=no;activeSentence=item;
- const r=new Recognition();activeRecognition=r;r.lang='en-US';r.continuous=false;r.interimResults=false;r.maxAlternatives=3;
+ const r=new Recognition();activeRecognition=r;r.lang='en-US';r.continuous=false;r.interimResults=true;r.maxAlternatives=3;
  let spoken='',error='',resolved=false;
  const done=()=>{if(resolved)return;resolved=true;clearTimeout(timer);activeNo=null;activeRecognition=null;activeSentence=null;
  const k=speakingKey(no),saved=speakingPasses(),attempts=speakingAttempts();
@@ -745,7 +747,7 @@ async function startRecording(no){
  if(no>=10000){const base=Math.floor(no/10)-1000;const keys=[0,1,2].map(i=>speakingKey(formId(base,i)));if(keys.every(k=>saved[k]?.passed))saved[speakingKey(base)]={passed:true,percent:100,transcript:voiceItem(base).en};}
  writeMap(SPEAKING_PASS_KEY,saved);writeMap(SPEAKING_ATTEMPT_KEY,attempts);
  updateRecordResult(no,error||!spoken?'음성인식 실패: '+escapeHtml(error||'no-speech')+' (횟수 차감 없음)':`인식: ${escapeHtml(spoken)} · ${percent}%`);render();};
- r.onresult=e=>{const choices=Array.from(e.results[0]);spoken=(choices.find(x=>speakingMatch(item.en,x.transcript)===100)||choices[0]).transcript;};r.onerror=e=>{error=e.error;};r.onend=done;
+ r.onstart=()=>updateRecordResult(no,'마이크 준비 중…');r.onaudiostart=()=>updateRecordResult(no,'🎙 지금 영어로 말해 주세요');r.onspeechstart=()=>updateRecordResult(no,'음성 감지 중…');r.onresult=e=>{const choices=Array.from(e.results[e.resultIndex]);const best=choices.find(x=>speakingMatch(item.en,x.transcript)===100)||choices[0];if(best)spoken=best.transcript;if(e.results[e.resultIndex].isFinal){try{r.stop()}catch(e){}}};r.onerror=e=>{if(!spoken)error=e.error;};r.onend=done;
  const timer=setTimeout(()=>{error='timeout';try{r.abort()}catch(e){}done()},15000);
  updateRecordResult(no,'영어로 말해 주세요…');const btn=document.querySelector(`[data-record="${no}"]`);if(btn)btn.textContent='⏹ 종료';try{r.start()}catch(e){error=e.message;done();}
 }
@@ -806,7 +808,7 @@ function render(){
  $('sentenceList').innerHTML=visible.map(x=>{
   const irregular=x.forms?.length===3,ko=irregular?x.ko.split(' · ')[0]:x.ko;
   let text=viewMode==='ko'?escapeHtml(ko):viewMode==='en'?escapeHtml(x.en):`<div>${escapeHtml(ko)}</div>${irregular?'':`<div>${escapeHtml(x.en)}</div>`}`;
-  if(irregular){text=viewMode==='en'?'':escapeHtml(ko);text+=`<div style="display:grid;gap:8px;margin-top:8px">${x.forms.map((form,i)=>{const id=formId(x.no,i),rec=recordingResults[id],pass=speaking[speakingKey(id)];return `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px;align-items:center"><div style="font-size:14px">${['현재형','과거형','과거분사'][i]}<br>${viewMode==='ko'?'':escapeHtml(form)}</div><button class="speak-btn" data-form-speak="${x.no}" data-form-index="${i}">🔊</button><button class="record-btn" data-record="${id}">${pass?.passed?'✓':'🎙'} 인식</button><button style="grid-column:2/4" data-audio-only="${id}">내 목소리 녹음</button><div style="grid-column:1/-1;font-size:13px" id="record-${id}">${rec?.html||''}${rec?.audioUrl?`<audio controls src="${rec.audioUrl}"></audio>`:''}</div></div>`}).join('')}</div>`;}
+  if(irregular){text=viewMode==='en'?'':escapeHtml(ko);text+=`<div style="display:grid;gap:8px;margin-top:8px">${x.forms.map((form,i)=>{const id=formId(x.no,i),rec=recordingResults[id],pass=speaking[speakingKey(id)];return `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:3px;align-items:center"><div style="font-size:14px">${['현재형','과거형','과거분사'][i]}<br>${viewMode==='ko'?'':escapeHtml(form)}</div><button class="speak-btn" data-form-speak="${x.no}" data-form-index="${i}">🔊</button><button class="record-btn" data-record="${id}">${pass?.passed?'✓':'🎙'} 인식</button><button class="form-audio" data-audio-only="${id}">녹음</button><div style="grid-column:1/-1;font-size:13px" id="record-${id}">${rec?.html||''}${rec?.audioUrl?`<audio controls src="${rec.audioUrl}"></audio>`:''}</div></div>`}).join('')}</div>`;}
   else if(x.example){if(viewMode!=='ko')text+=`<div>${escapeHtml(x.example)}</div>`;if(viewMode!=='en'&&x.translation)text+=`<div>${escapeHtml(x.translation)}</div>`;text+=`<button class="speak-btn" data-example-speak="${x.no}">🔊 예문 듣기</button>`;}
   const pass=speaking[speakingKey(x.no)];
   const attemptCount=Number(speakingAttempts()[speakingKey(x.no)]||0);
@@ -845,7 +847,7 @@ function render(){
     else alert('이전 문장의 음성 확인이 끝난 뒤 다음 문장을 녹음해 주세요.');
     return;
    }
-   if(activeNo===no){finishRecording();return;}
+   if(activeNo===no){if(activeRecognition){try{activeRecognition.stop()}catch(e){}}else finishRecording();return;}
    if(activeNo!==null){alert('먼저 진행 중인 녹음을 마쳐 주세요.');return;}
    startRecording(no);
   };

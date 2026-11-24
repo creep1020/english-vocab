@@ -33,7 +33,7 @@ messaging.onBackgroundMessage(payload => {
 });
 
 // v10: 최신 HTML 배포본 우선 적용
-const CACHE = 'ilppang-seq-v13-vocab';
+const CACHE = 'ilppang-seq-v14-vocab';
 
 const FILES = [
   './',
@@ -68,7 +68,7 @@ self.addEventListener('activate', event => {
     await Promise.all(
       keys
         .filter(key =>
-          key.startsWith('ilppang-seq-') && key !== CACHE
+          key.startsWith('ilppang-seq-') && key.endsWith('-vocab') && key !== CACHE
         )
         .map(key => caches.delete(key))
     );
