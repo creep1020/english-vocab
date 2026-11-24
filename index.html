@@ -564,7 +564,7 @@ async function finishSpeakingAttempt(){
  writeMap(SPEAKING_PASS_KEY,saved);writeMap(SPEAKING_ATTEMPT_KEY,attemptMap);
  if(!passes&&attemptCount>=3)autoAddFailedSpeakingToReview(no);
  const transcript=spoken?`<br><b>인식 결과:</b> “${escapeHtml(spoken)}”`:`<br>인식된 음성이 없어요.${activeRecognitionError?` (오류: ${escapeHtml(activeRecognitionError)})`:''}`;
- let result=passes
+ let result=!spoken?`<b>음성인식 결과 없음 (횟수 차감 없음)</b>${transcript}<br>마이크 준비 안내 후 다시 말해 주세요.`:passes
   ?`<b>✅ 통과 · 일치율 ${percent}%</b>${transcript}<br>이 문장은 말하기 학습을 통과했어요.`
   :attemptCount>=3
    ?`<b>📚 3회 실패 · 일치율 ${percent}%</b>${transcript}<br>복습 목록에 자동 등록했어요. 오늘 복습에서 다시 말해 주세요.`
@@ -773,6 +773,13 @@ async function startRecording(no){
   const recognition=new Recognition();activeRecognition=recognition;
   recognition.lang='en-US';recognition.continuous=true;recognition.interimResults=true;recognition.maxAlternatives=1;
   let latestTranscript='';
+  const btn=document.querySelector(`[data-record="${no}"]`);
+  if(btn){btn.textContent='준비 중…';btn.disabled=true;}
+  recognition.onaudiostart=()=>{
+   if(activeRecognition!==recognition||activeNo!==no)return;
+   updateRecordResult(no,'🔴 지금 영어 단어를 말해 주세요. 말한 뒤 잠시 기다렸다가 녹음 종료를 누르세요.');
+   if(btn){btn.textContent='⏹ 종료';btn.disabled=false;}
+  };
   recognition.onresult=e=>{
    const parts=[];
    for(let i=0;i<e.results.length;i++){
@@ -789,11 +796,11 @@ async function startRecording(no){
   };
   recognition.onend=()=>{
    recognitionEnded=true;
+   if(btn){btn.disabled=false;btn.textContent='⏹ 종료';}
    if(latestTranscript)activeTranscript=latestTranscript;
    finishSpeakingAttempt();
   };
-  updateRecordResult(no,'🔴 녹음 중이에요. 영어 문장을 말해 주세요. 다 말한 뒤 <b>녹음 종료</b>를 누르면 일치율을 확인합니다.');
-  const btn=document.querySelector(`[data-record="${no}"]`);if(btn)btn.textContent='⏹ 녹음 종료';
+  updateRecordResult(no,'마이크 준비 중… 말하기 안내가 나올 때까지 기다려 주세요.');
   try{recognition.start();}
   catch(e){activeRecognitionError='recognition-start-failed';throw e;}
  }catch(err){
@@ -828,7 +835,13 @@ function finishRecording(){
  }
  if(activeNo===null)return;
  // 음성인식을 먼저 정상 종료해 마지막 인식 결과가 전달될 시간을 준다.
- if(activeRecognition){try{activeRecognition.stop()}catch(e){recognitionEnded=true;}}
+ const stoppingRecognition=activeRecognition;
+ const stoppingNo=activeNo;
+ const stopBtn=document.querySelector(`[data-record="${stoppingNo}"]`);
+ if(stopBtn){stopBtn.disabled=true;stopBtn.textContent='확인 중…';}
+ updateRecordResult(stoppingNo,'⏳ 최종 음성인식 결과 확인 중…');
+ if(activeRecognition&&!recognitionEnded){try{activeRecognition.stop()}catch(e){recognitionEnded=true;}
+ setTimeout(()=>{if(activeRecognition===stoppingRecognition&&activeNo===stoppingNo&&!recognitionEnded){activeRecognitionError=activeRecognitionError||'result-timeout';recognitionEnded=true;try{stoppingRecognition.abort()}catch(e){}finishSpeakingAttempt();}},5000);}
  else recognitionEnded=true;
  if(activeRecorder&&activeRecorder.state!=='inactive')activeRecorder.stop();else recorderEnded=true;
  finishSpeakingAttempt();
@@ -857,7 +870,7 @@ function render(){
  $('showReview').classList.toggle('active',listMode==='review');
  const allItems=DATA.flatMap(d=>d.items);
  const visible=listMode==='all'?data.items:allItems.filter(x=>review[x.no]);
- $('itemCount').textContent=listMode==='all'?`${data.items.length}문장`:`복습 ${visible.length}문장`;
+ $('itemCount').textContent=listMode==='all'?`${data.items.length}단어`:`복습 ${visible.length}단어`;
  $('emptyReview').style.display=visible.length?'none':'block';
  $('sentenceList').innerHTML=visible.map(x=>{
   let text=viewMode==='ko'?escapeHtml(x.ko):viewMode==='en'?escapeHtml(x.en):`<div>${escapeHtml(x.ko)}</div><div class="english" style="font-size:.86em;color:#5f695e;margin-top:3px">${escapeHtml(x.en)}</div>`;
