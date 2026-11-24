@@ -74,6 +74,7 @@ button{cursor:pointer}button:disabled{opacity:.4;cursor:default}.primary{backgro
 @keyframes kekeFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
 
 [data-form-speak], [data-record][data-record]:not(.item-tools button), .form-audio{padding:5px 6px!important;font-size:12px!important;min-width:0!important;min-height:34px!important;white-space:nowrap!important;}
+audio, .record-audio {width:100%!important;max-width:100%!important;min-width:0!important;display:block;box-sizing:border-box} .record-result,.item-main,.item-text {min-width:0;max-width:100%;overflow-wrap:anywhere;box-sizing:border-box}
 </style></head>
  <script>
 if ('serviceWorker' in navigator) {
@@ -113,7 +114,7 @@ if ('serviceWorker' in navigator) {
 </section>
 <div class="toggle" id="studyViewToggle"><button id="koreanBtn" class="active">한국어 보기</button><button id="englishBtn">영어 보기</button><button id="bothBtn">함께 보기</button></div>
 <section class="panel" id="voiceSettingsPanel"><strong style="font-size:14px">🔊 음성 설정</strong><div style="margin-top:10px"><label for="voiceRate">말하기 속도 <span id="rateLabel">0.85배</span></label><input id="voiceRate" type="range" min="0.75" max="1.05" step="0.05" value="0.85" style="width:100%"></div></section>
-<section class="panel" id="sentenceStudyPanel"><div class="small" style="margin-bottom:10px">🎙 음성인식과 내 목소리 녹음은 마이크 충돌 방지를 위해 따로 실행합니다.</div><div class="filterbar"><button id="showAll" class="active">오늘 20단어</button><button id="showReview">복습할 단어</button><span class="item-count" id="itemCount"></span></div><ol class="list" id="sentenceList"></ol><div class="small" id="emptyReview" style="display:none;padding:18px 0">복습할 단어이 아직 없어요. 헷갈리는 문장에서 ‘복습’ 버튼을 눌러 추가하세요.</div></section>
+<section class="panel" id="sentenceStudyPanel"><div class="small" style="margin-bottom:10px">🎙 녹음 버튼으로 내 목소리를 저장하고 영어 음성인식을 확인합니다.</div><div class="filterbar"><button id="showAll" class="active">오늘 20단어</button><button id="showReview">복습할 단어</button><span class="item-count" id="itemCount"></span></div><ol class="list" id="sentenceList"></ol><div class="small" id="emptyReview" style="display:none;padding:18px 0">복습할 단어이 아직 없어요. 헷갈리는 문장에서 ‘복습’ 버튼을 눌러 추가하세요.</div></section>
 <section class="panel" id="studyActionsPanel">
 <div class="actions"><button class="primary" id="markDone">✓ 오늘 학습 완료</button><button id="undoDone">완료 취소</button></div>
 <div class="status" id="studyStatus">학습을 마친 뒤 완료 버튼을 눌러 기록하세요.</div><div id="bonusGameWrap" style="display:none;margin-top:10px"><button class="primary" id="bonusGameBtn" style="width:100%">🎁 보너스 미니게임 1분 도전하기</button><div class="small" id="bonusGameHint" style="text-align:center;margin-top:5px">오늘의 20개 단어 학습을 완료하면 1분 보너스 게임이 열려요.</div></div>
@@ -739,17 +740,17 @@ async function startRecording(no){
  if(!item||!Recognition){alert('크롬 영어 음성인식을 사용할 수 없어요.');return;}
  stopEnglishSpeech();activeNo=no;activeSentence=item;
  const r=new Recognition();activeRecognition=r;r.lang='en-US';r.continuous=false;r.interimResults=true;r.maxAlternatives=3;
- let spoken='',error='',resolved=false;
- const done=()=>{if(resolved)return;resolved=true;clearTimeout(timer);activeNo=null;activeRecognition=null;activeSentence=null;
+ let spoken='',error='',resolved=false,stream=null,recorder=null,chunks=[];
+ const done=async()=>{if(resolved)return;resolved=true;clearTimeout(timer);if(recorder&&recorder.state!=='inactive'){await new Promise(resolve=>{recorder.addEventListener('stop',resolve,{once:true});recorder.stop();});}if(stream)stream.getTracks().forEach(t=>t.stop());const blob=chunks.length?new Blob(chunks,{type:recorder.mimeType}):null;if(blob&&blob.size){recordingResults[no]=recordingResults[no]||{};recordingResults[no].audioUrl=URL.createObjectURL(blob);}activeNo=null;activeRecognition=null;activeSentence=null;
  const k=speakingKey(no),saved=speakingPasses(),attempts=speakingAttempts();
  const percent=speakingMatch(item.en,spoken);
  if(spoken&&!error){if(percent>= (item.forms?100:50)){saved[k]={passed:true,percent,transcript:spoken};delete attempts[k];}else{attempts[k]=Math.min(3,(attempts[k]||0)+1);if(no<10000&&attempts[k]>=3)autoAddFailedSpeakingToReview(no);}}
  if(no>=10000){const base=Math.floor(no/10)-1000;const keys=[0,1,2].map(i=>speakingKey(formId(base,i)));if(keys.every(k=>saved[k]?.passed))saved[speakingKey(base)]={passed:true,percent:100,transcript:voiceItem(base).en};}
  writeMap(SPEAKING_PASS_KEY,saved);writeMap(SPEAKING_ATTEMPT_KEY,attempts);
- updateRecordResult(no,error||!spoken?'음성인식 실패: '+escapeHtml(error||'no-speech')+' (횟수 차감 없음)':`인식: ${escapeHtml(spoken)} · ${percent}%`);render();};
+ updateRecordResult(no,error||!spoken?'음성인식 실패: '+escapeHtml(error||'no-speech')+' (횟수 차감 없음)':`인식: ${escapeHtml(spoken)} · ${percent}%`);render();if(blob&&blob.size)try{await saveRecordingBlob(no,blob,recordingResults[no].html)}catch(e){console.warn(e)};};
  r.onstart=()=>updateRecordResult(no,'마이크 준비 중…');r.onaudiostart=()=>updateRecordResult(no,'🎙 지금 영어로 말해 주세요');r.onspeechstart=()=>updateRecordResult(no,'음성 감지 중…');r.onresult=e=>{const choices=Array.from(e.results[e.resultIndex]);const best=choices.find(x=>speakingMatch(item.en,x.transcript)===100)||choices[0];if(best)spoken=best.transcript;if(e.results[e.resultIndex].isFinal){try{r.stop()}catch(e){}}};r.onerror=e=>{if(!spoken)error=e.error;};r.onend=done;
  const timer=setTimeout(()=>{error='timeout';try{r.abort()}catch(e){}done()},15000);
- updateRecordResult(no,'영어로 말해 주세요…');const btn=document.querySelector(`[data-record="${no}"]`);if(btn)btn.textContent='⏹ 종료';try{r.start()}catch(e){error=e.message;done();}
+ updateRecordResult(no,'영어로 말해 주세요…');const btn=document.querySelector(`[data-record="${no}"]`);if(btn)btn.textContent='⏹ 종료';try{stream=await navigator.mediaDevices.getUserMedia({audio:true});if(resolved){stream.getTracks().forEach(t=>t.stop());return;}recorder=new MediaRecorder(stream);recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.start();try{r.start(stream.getAudioTracks()[0]);}catch(e){r.start();}}catch(e){error=e.message;done();}
 }
 async function recordOnly(no,btn){if(activeNo!==null)return;activeNo=no;let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:true});const r=new MediaRecorder(stream),chunks=[];r.ondataavailable=e=>chunks.push(e.data);r.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());activeNo=null;const blob=new Blob(chunks,{type:r.mimeType});recordingResults[no]={audioUrl:URL.createObjectURL(blob),html:'내 목소리 녹음'};render();try{await saveRecordingBlob(no,blob,'내 목소리 녹음')}catch(e){console.warn(e)}};r.start();btn.textContent='⏹ 녹음 종료';btn.onclick=()=>{if(r.state!=='inactive')r.stop()};setTimeout(()=>{if(r.state!=='inactive')r.stop()},15000);}catch(e){if(stream)stream.getTracks().forEach(t=>t.stop());activeNo=null;alert(e.message);}}
 function finishRecording(){
@@ -808,7 +809,7 @@ function render(){
  $('sentenceList').innerHTML=visible.map(x=>{
   const irregular=x.forms?.length===3,ko=irregular?x.ko.split(' · ')[0]:x.ko;
   let text=viewMode==='ko'?escapeHtml(ko):viewMode==='en'?escapeHtml(x.en):`<div>${escapeHtml(ko)}</div>${irregular?'':`<div>${escapeHtml(x.en)}</div>`}`;
-  if(irregular){text=viewMode==='en'?'':escapeHtml(ko);text+=`<div style="display:grid;gap:8px;margin-top:8px">${x.forms.map((form,i)=>{const id=formId(x.no,i),rec=recordingResults[id],pass=speaking[speakingKey(id)];return `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:3px;align-items:center"><div style="font-size:14px">${['현재형','과거형','과거분사'][i]}<br>${viewMode==='ko'?'':escapeHtml(form)}</div><button class="speak-btn" data-form-speak="${x.no}" data-form-index="${i}">🔊</button><button class="record-btn" data-record="${id}">${pass?.passed?'✓':'🎙'} 인식</button><button class="form-audio" data-audio-only="${id}">녹음</button><div style="grid-column:1/-1;font-size:13px" id="record-${id}">${rec?.html||''}${rec?.audioUrl?`<audio controls src="${rec.audioUrl}"></audio>`:''}</div></div>`}).join('')}</div>`;}
+  if(irregular){text=viewMode==='en'?'':escapeHtml(ko);text+=`<div style="display:grid;gap:8px;margin-top:8px">${x.forms.map((form,i)=>{const id=formId(x.no,i),rec=recordingResults[id],pass=speaking[speakingKey(id)];return `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:5px;align-items:center"><div style="font-size:14px">${['현재형','과거형','과거분사'][i]}<br>${viewMode==='ko'?'':escapeHtml(form)}</div><button class="speak-btn" data-form-speak="${x.no}" data-form-index="${i}">🔊</button><button class="record-btn" data-record="${id}">${pass?.passed?'✓':'🎙'} 녹음</button><div style="grid-column:1/-1;font-size:13px" id="record-${id}">${rec?.html||''}${rec?.audioUrl?`<audio controls src="${rec.audioUrl}"></audio>`:''}</div></div>`}).join('')}</div>`;}
   else if(x.example){if(viewMode!=='ko')text+=`<div>${escapeHtml(x.example)}</div>`;if(viewMode!=='en'&&x.translation)text+=`<div>${escapeHtml(x.translation)}</div>`;text+=`<button class="speak-btn" data-example-speak="${x.no}">🔊 예문 듣기</button>`;}
   const pass=speaking[speakingKey(x.no)];
   const attemptCount=Number(speakingAttempts()[speakingKey(x.no)]||0);
@@ -816,7 +817,7 @@ function render(){
   const initial=pass?.passed?`<b>✅ 통과 · 일치율 ${pass.percent}%</b><br>인식 결과: “${escapeHtml(pass.transcript||'')}”`:'';
   const exhausted=attemptCount>=3&&!pass?.passed;
   const recordLabel=activeNo===x.no?'⏹ 녹음 종료':pass?.passed?'✅ 말하기 통과':exhausted?'📚 복습 대기':attemptCount?`🎙 다시 녹음 (${attemptCount}/3)`:'🎙 녹음';
-  return `<li><span class="num">${String(x.no).padStart(3,'0')}</span><span class="item-main"><span class="item-text">${text}</span><span class="item-tools">${irregular?'':`<button class="speak-btn" data-speak="${x.no}" aria-label="영어 단어 또는 표현 듣기">🔊 듣기</button><button class="record-btn" data-record="${x.no}" ${exhausted?'disabled':''}>${recordLabel}</button><button data-audio-only="${x.no}">내 목소리 녹음</button>`}<label><input type="checkbox" data-check="${x.no}" ${checked[x.no]?'checked':''}> 학습 완료</label><button class="review-btn ${review[x.no]?'saved':''}" data-review="${x.no}">${review[x.no]?'★ 복습 목록에 있음':'☆ 복습 추가'}</button></span><div class="record-result ${rec||initial?'show':''}" id="record-${x.no}">${rec?.html||initial}${rec?.audioUrl?`<audio controls class="record-audio" src="${rec.audioUrl}"></audio>`:''}</div></span></li>`;
+  return `<li><span class="num">${String(x.no).padStart(3,'0')}</span><span class="item-main"><span class="item-text">${text}</span><span class="item-tools">${irregular?'':`<button class="speak-btn" data-speak="${x.no}" aria-label="영어 단어 또는 표현 듣기">🔊 듣기</button><button class="record-btn" data-record="${x.no}" ${exhausted?'disabled':''}>${recordLabel}</button>`}<label><input type="checkbox" data-check="${x.no}" ${checked[x.no]?'checked':''}> 학습 완료</label><button class="review-btn ${review[x.no]?'saved':''}" data-review="${x.no}">${review[x.no]?'★ 복습 목록에 있음':'☆ 복습 추가'}</button></span><div class="record-result ${rec||initial?'show':''}" id="record-${x.no}">${rec?.html||initial}${rec?.audioUrl?`<audio controls class="record-audio" src="${rec.audioUrl}"></audio>`:''}</div></span></li>`;
  }).join('');
  // Android WebView에서 부모 요소의 위임 클릭이 누락되는 경우를 피하도록
  // 녹음 버튼 자체에 직접 클릭 동작을 연결합니다.
