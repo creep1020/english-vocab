@@ -647,12 +647,13 @@ window.onIlbbangNativeVoiceStatus=function(requestId,status){
   return;
  }
  if(status==='recording'){
+  pending.recordingStartedAt=Date.now();
   if(pending.mode==='sentence'){
-   updateRecordResult(pending.no,'🔴 영어 문장을 말해 주세요. 다 말한 뒤 녹음 종료를 눌러 주세요.');
+   updateRecordResult(pending.no,'🔴 1초 기다린 뒤 영어를 말하고 녹음 종료를 눌러 주세요.');
    const btn=document.querySelector(`[data-record="${pending.no}"]`);if(btn){btn.textContent='⏹ 녹음 종료';btn.disabled=false;}
   }else if(pending.mode==='review'){
    pending.recordingStarted=true;
-   $('reviewFeedback').textContent='🔴 영어 문장을 말해 주세요. 다 말한 뒤 녹음 종료를 누르세요.';
+   $('reviewFeedback').textContent='🔴 1초 기다린 뒤 영어를 말하고 녹음 종료를 누르세요.';
    $('reviewMicBtn').textContent='⏹ 녹음 종료';$('reviewMicBtn').disabled=false;
   }
   return;
@@ -724,7 +725,7 @@ window.onIlbbangNativeVoiceResult=async function(result){
   const item=due.find(x=>x.no===pending.no);
   if(!item)return;
   if(error||!transcript){
-   handleReviewFailure(item,pending.reviewMode,error||'음성이 잘 들리지 않았어요.');
+   reviewListening=false;reviewRecognition=null;renderReviewGate(due,pending.reviewMode);$('reviewFeedback').textContent='음성인식 실패 (횟수 차감 없음): '+(error||'인식 결과 없음');
    return;
   }
   const expected=normalizeSpokenSentence(item.en),actual=normalizeSpokenSentence(transcript);
@@ -813,6 +814,12 @@ async function startRecording(no){
   alert('녹음/음성인식을 시작하지 못했어요. 마이크 권한과 인터넷 연결을 확인해 주세요. ('+err.message+')');
  }
 }
+function scheduleNativeStop(pending){
+ if(pending.stopScheduled)return;
+ pending.stopScheduled=true;
+ const delay=Math.max(900,3000-(Date.now()-(pending.recordingStartedAt||Date.now())));
+ setTimeout(()=>{if(nativeVoicePending===pending){try{window.IlbbangAndroid.stopRecording(pending.requestId);}catch(e){window.onIlbbangNativeVoiceResult({requestId:pending.requestId,error:String(e)});}}},delay);
+}
 function finishRecording(){
  // APK에서는 activeNo가 먼저 초기화된 경우에도 네이티브 요청 ID가 살아 있으면
  // 해당 요청을 종료해야 합니다. 기존 코드의 activeNo 조기 반환이 종료 버튼을 무시하게 했습니다.
@@ -822,7 +829,7 @@ function finishRecording(){
   const btn=document.querySelector(`[data-record="${pending.no}"]`);if(btn){btn.textContent='⏳ 음성 확인 중…';btn.disabled=true;}
   try{
    if(window.IlbbangAndroid&&typeof window.IlbbangAndroid.stopRecording==='function'){
-    window.IlbbangAndroid.stopRecording(pending.requestId);
+    scheduleNativeStop(pending);
    }else{
     updateRecordResult(pending.no,'Android 녹음 종료 기능이 없는 앱 버전이에요. 앱 업데이트가 필요해요.');
     if(btn)btn.textContent='🎙 다시 녹음';
@@ -1009,7 +1016,7 @@ function startReviewSpeaking(){
    if(nativeVoicePending.recordingStarted){
     $('reviewFeedback').textContent='⏳ 녹음을 종료했어요. 음성인식 결과를 기다려 주세요…';
     $('reviewMicBtn').textContent='⏳ 음성 확인 중…';$('reviewMicBtn').disabled=true;
-    try{window.IlbbangAndroid.stopRecording(nativeVoicePending.requestId);}catch(err){$('reviewFeedback').textContent='녹음 종료에 실패했어요: '+(err.message||String(err));}
+    try{scheduleNativeStop(nativeVoicePending);}catch(err){$('reviewFeedback').textContent='녹음 종료에 실패했어요: '+(err.message||String(err));}
    }
    return;
   }
@@ -1942,15 +1949,18 @@ async function loadAndMergeCloud(user) {
   status('☁️ 클라우드 기록을 확인하고 있어요…');
   const ref = doc(db, 'ilbbangUsers', user.uid, 'privateSettings', 'english-vocab-study');
   try {
+    const familySnap = await getDoc(doc(db, 'ilbbangUsers', user.uid));
+    const familyProfiles = (familySnap.exists() && Array.isArray(familySnap.data().profiles)) ? familySnap.data().profiles.filter(p=>p && p.id).map(p=>({id:String(p.id),name:String(p.name||'프로필')})) : [];
     const snap = await getDoc(ref);
     const localData = readLocalSnapshot();
     if (!snap.exists()) {
-      profiles = [{...DEFAULT_PROFILE}];
-      activeProfileId = DEFAULT_PROFILE.id;
+      profiles = familyProfiles.length ? familyProfiles : [{...DEFAULT_PROFILE}];
+      activeProfileId = profiles[0].id;
       localStorage.setItem(ACTIVE_PROFILE_KEY, activeProfileId);
-      profileData = {[activeProfileId]: localData};
+      profileData = {[activeProfileId]: familyProfiles.length ? {} : localData};
+      if(familyProfiles.length){ originalSetItem.call(localStorage, "vocabUnassignedBackupV18", JSON.stringify(localData)); applySnapshot({}); }
       await setDoc(ref, { profiles, activeProfileId, profileData, updatedAt: serverTimestamp() });
-      lastCloudData = localData;
+      lastCloudData = profileData[activeProfileId];
       syncReady = true;
     if (window.IlbbangAndroid && typeof registerNativeFcmTokenIfReady === 'function') registerNativeFcmTokenIfReady().catch(e => console.warn('Android FCM token sync pending', e));
       status('☁️ 첫 동기화 완료 · 기존 기록을 첫 프로필에 보관했어요.');
@@ -1968,8 +1978,13 @@ async function loadAndMergeCloud(user) {
         localStorage.setItem(ACTIVE_PROFILE_KEY, activeProfileId);
         profileData = {[activeProfileId]: cloud.data || {}};
       }
+      const previousId = activeProfileId;
+      profiles = [...familyProfiles, ...profiles.filter(p=>!familyProfiles.some(f=>f.id===p.id))];
+      if(familyProfiles.length && !familyProfiles.some(p=>p.id===activeProfileId)) activeProfileId=familyProfiles[0].id;
+      localStorage.setItem(ACTIVE_PROFILE_KEY,activeProfileId);
+      if(previousId!==activeProfileId) originalSetItem.call(localStorage,'vocabUnassignedBackupV18',JSON.stringify(localData));
       const prior = profileData[activeProfileId] || {};
-      const merged = mergeSnapshots(prior, localData);
+      const merged = mergeSnapshots(prior, previousId===activeProfileId ? localData : {});
       profileData[activeProfileId] = merged;
       await setDoc(ref, { profiles, activeProfileId, profileData, updatedAt: serverTimestamp() });
       lastCloudData = merged;
